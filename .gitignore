@@ -1,0 +1,10 @@
+KGs/
+KGs.zip
+Experiments/
+data/UMLS_clean/
+data/UMLS_poisoned*/
+out/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store

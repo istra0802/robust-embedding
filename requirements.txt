@@ -1,0 +1,5 @@
+dicee
+scikit-learn
+pandas
+numpy
+matplotlib
