@@ -5,7 +5,7 @@
 #
 # Usage: bash scripts/run_pipeline.sh
 set -e
-
+### only three addition attack is here (sp)
 PATTERN_HEUR_PAIRS=("symmetry truth" "inversion truth" "composition truth")
 
 echo "== Step 0: install + data (skip if already done) =="
