@@ -17,6 +17,26 @@ Decoy-entity selection implements all three heuristics from the paper
 (Section 3.2): soft truth score (`truth`), KGE rank (`rank`), cosine
 distance (`cos`).
 
+## Two attack types
+
+This repo covers **both** families of data-poisoning edits:
+
+1. **Addition attack (the paper).** Adds adversarial triples that make the
+   model believe a *decoy* fact through symmetry, inversion, or composition,
+   which pushes the true target fact down in the ranking.
+
+2. **Deletion attack (our extension).** For each target triple, it removes
+   the training triples that most strongly *support* the target (the highest
+   TransE score among the target's neighbours), so the model loses the
+   evidence it relied on. Every deleted triple is recorded in
+   `out/del_deletion.tsv` and verified by `12_verify_deletion.py` (confirms
+   each deleted triple is gone from the new train.txt and existed in the
+   original, and that the counts match).
+
+For both attacks we always know exactly which triples changed: the added
+triples are in `out/adv_*.tsv`, and the deleted triples are in
+`out/del_deletion.tsv`.
+
 ## Pipeline overview
 
 ```
@@ -24,22 +44,24 @@ train.txt (clean) --[03]--> clean TransE model --[04]--> embeddings.csv
                                      |
                                     [05] select target triples (rank<=10)
                                      |
-                                    [06] generate adversarial triples
-                                     |                (symmetry/inversion/composition)
-                                    [07] merge into poisoned train.txt
+          ADDITION:                  |          DELETION:
+          [06] generate adversarial  |          [10] choose triples to delete
+               triples               |               (most-supportive neighbours)
+          [07] merge into poisoned   |          [11] remove them -> UMLS_deleted
+               train.txt             |          [12] verify deletion
                                      |
                                     [08] retrain TransE (same hyperparams)
                                      |
-                                    [04] extract poisoned embeddings
+                                    [04] extract poisoned/deleted embeddings
                                      |
-                                    [09] compare clean vs poisoned MRR/Hits@1/Hits@10
+                                    [09] compare clean vs attacked MRR/Hits@1/Hits@10
                                           on the SAME target triples -> results/
 ```
 
 ## Repository layout
 
 ```
-kge-poisoning-attack/
+robust-embedding/
 ├── README.md
 ├── requirements.txt
 ├── scripts/
@@ -48,14 +70,18 @@ kge-poisoning-attack/
 │   ├── 03_train_clean.py            # trains clean TransE via dicee
 │   ├── 04_extract_embeddings.py     # dumps entity/relation embeddings to CSV
 │   ├── 05_select_targets.py         # picks rank<=10 target triples (paper Sec.4)
-│   ├── 06_generate_attack.py        # runs the paper's attack (Sec.3)
-│   ├── 07_build_poisoned_dataset.py # merges adversarial triples into train.txt
-│   ├── 08_train_poisoned.py         # retrains TransE on poisoned data
-│   ├── 09_evaluate_compare.py       # clean vs poisoned comparison table+chart
-│   └── run_pipeline.sh              # runs all of the above end-to-end
+│   ├── 06_generate_attack.py        # ADDITION: generate adversarial triples (Sec.3)
+│   ├── 07_build_poisoned_dataset.py # ADDITION: merge adversarial triples into train.txt
+│   ├── 08_train_poisoned.py         # retrains TransE on poisoned/deleted data
+│   ├── 09_evaluate_compare.py       # clean vs attacked comparison table+chart
+│   ├── 10_generate_deletion.py      # DELETION: choose triples to delete + record them
+│   ├── 11_build_deleted_dataset.py  # DELETION: remove them -> data/UMLS_deleted
+│   ├── 12_verify_deletion.py        # DELETION: prove the deletion really happened
+│   └── run_pipeline.sh              # runs addition + deletion end-to-end
 ├── src/
 │   ├── kge_utils.py                 # TransE scoring + filtered ranking (paper Sec.2)
-│   └── attacks.py                   # symmetry/inversion/composition attacks (paper Sec.3)
+│   ├── attacks.py                   # ADDITION: symmetry/inversion/composition (Sec.3)
+│   └── deletion_attack.py           # DELETION: most-supportive-neighbour logic
 ├── tests/
 │   └── test_offline_sanity.py       # numpy-only smoke test, no dicee/network needed
 └── results/                         # comparison.csv / comparison.png land here
@@ -93,8 +119,7 @@ bash scripts/02_download_data.sh
 ```
 
 This downloads `KGs.zip` from the dice-research servers and stages a
-working copy of UMLS under `data/UMLS_clean/` (untouched baseline) and
-`data/UMLS_poisoned/` (scratch copy, overwritten per attack run).
+working copy of UMLS under `data/UMLS_clean/` (untouched baseline).
 
 ### 3. Sanity-check the attack code (optional but recommended)
 
@@ -119,7 +144,7 @@ python scripts/04_extract_embeddings.py Experiments/UMLS_TransE_clean out/clean
 python scripts/05_select_targets.py out/clean data/UMLS_clean out/targets.tsv --max_rank 10
 ```
 
-### 6. Run one attack (example: symmetry pattern, soft-truth-score heuristic)
+### 6. Addition attack (example: symmetry pattern, soft-truth-score heuristic)
 
 ```bash
 python scripts/06_generate_attack.py out/clean data/UMLS_clean out/targets.tsv \
@@ -136,36 +161,65 @@ python scripts/04_extract_embeddings.py \
 ```
 
 Repeat with `inversion` / `composition` and `truth` / `rank` / `cos` for
-the other 8 combinations, or just run everything at once:
+the other 8 combinations, or just run everything at once (section 8).
 
-### 7. Run the whole pipeline (3 attacks by default) + comparison
+The triples added by each attack are saved in `out/adv_<pattern>_<heuristic>.tsv`.
+
+### 7. Deletion attack
+
+```bash
+python scripts/10_generate_deletion.py       # writes out/del_deletion.tsv (exact list)
+python scripts/11_build_deleted_dataset.py   # writes data/UMLS_deleted/train.txt
+python scripts/12_verify_deletion.py         # must print ALL CHECKS PASSED
+python scripts/08_train_poisoned.py data/UMLS_deleted Experiments/UMLS_TransE_deleted
+python scripts/04_extract_embeddings.py Experiments/UMLS_TransE_deleted out/deleted
+```
+
+The file `out/del_deletion.tsv` lists exactly which triples were removed.
+`12_verify_deletion.py` confirms each deleted triple is gone from the new
+`train.txt`, existed in the original, and that
+`new size = original size − number deleted`.
+
+### 8. Run the whole pipeline (addition + deletion) + comparison
 
 ```bash
 bash scripts/run_pipeline.sh
 ```
 
-Edit the `PATTERN_HEUR_PAIRS` array at the top of `run_pipeline.sh` to add
-more pattern/heuristic combinations (9 total are implemented).
+This runs the three addition attacks and the deletion attack end-to-end and
+writes the full comparison. Edit the `PATTERN_HEUR_PAIRS` array at the top of
+`run_pipeline.sh` to add more pattern/heuristic combinations (9 total are
+implemented).
 
-### 8. Results
+### 9. Results
 
 ```bash
 cat results/comparison.csv
 open results/comparison.png   # or just view it
 ```
 
-You'll get a table like (numbers illustrative):
+Example result on UMLS (TransE, dim 32, 128 epochs, truth heuristic):
 
 | run                | MRR   | Hits@1 | Hits@10 | MRR_drop_% |
 |--------------------|-------|--------|---------|------------|
-| Original (clean)   | 0.90  | 0.85   | 0.99    | —          |
-| symmetry_truth     | 0.55  | 0.30   | 0.85    | 39%        |
-| inversion_truth    | 0.80  | 0.70   | 0.95    | 11%        |
-| composition_truth  | 0.78  | 0.68   | 0.94    | 13%        |
+| Original (clean)   | 0.649 | 0.432  | 1.000   | —          |
+| symmetry_truth     | 0.719 | 0.542  | 0.988   | −10.7%     |
+| inversion_truth    | 0.689 | 0.499  | 0.986   | −6.1%      |
+| composition_truth  | 0.599 | 0.397  | 0.948   | +7.8%      |
+| deletion           | 0.604 | 0.365  | 0.997   | +6.9%      |
 
-This is the exact comparison the paper reports in Tables 4/5 (reduction in
-MRR/Hits@1 of target triples due to the attack) — just reproduced on UMLS
-with `dicee` instead of the paper's own PyTorch codebase.
+A **positive** `MRR_drop_%` means the attack degraded the model on the target
+triples (the attack worked); a **negative** value means target MRR went up.
+On this TransE/UMLS setting, composition and deletion degrade the model,
+while symmetry and inversion raise overall target MRR — a side effect the
+original paper documents for TransE (Appendix C): injecting a genuine
+relational pattern the dataset was missing can improve general performance
+while the intended per-target damage is harder to see in overall MRR.
+
+> **Note on fair comparison.** The addition attacks add ~1–2 triples per
+> target, while the deletion attack here removed 76 triples total. For a
+> strict head-to-head, match the number of edits (e.g. cap the deletion
+> budget). This is a good next refinement.
 
 ## Notes / things to double check when you actually run this
 
@@ -177,34 +231,28 @@ with `dicee` instead of the paper's own PyTorch codebase.
   `EXPECTED_RELATION_KEY` at the top of the file.
 - The paper attacks **WN18RR / FB15k-237** at full scale; those are much
   bigger than UMLS, so runtimes will be materially longer if you swap
-  `--dataset_dir "KGs/UMLS"` for `"KGs/WN18RR"` or `"KGs/FB15k-237"` in
+  `KGs/UMLS` for `KGs/WN18RR` or `KGs/FB15k-237` in
   `03_train_clean.py` / `08_train_poisoned.py` — same scripts work, just
   budget more time/epochs.
-- `06_generate_attack.py` restricts the decoy/adversarial-entity search to
-  a random subsample of up to 200 non-neighbour candidates on larger graphs
-  for tractability; drop `max_candidates` for exhaustive search on small
-  KGs like UMLS.
+- `06_generate_attack.py` restricts the decoy/adversarial-entity search to a
+  random subsample of non-neighbour candidates on larger graphs for
+  tractability; use exhaustive search on small KGs like UMLS.
 
-## Pushing this to your own GitHub
+## Collaborating (two people, one repo)
 
+Before you start working each time:
 ```bash
-cd kge-poisoning-attack
-git init
-git add .
-git commit -m "Initial pipeline: KGE poisoning attack (inference patterns) with dice-embeddings"
-git branch -M main
-git remote add origin https://github.com/<your-username>/<your-repo-name>.git
-git push -u origin main
+git pull
 ```
-
-(Create the empty repo on GitHub first via the web UI or `gh repo create
-<your-repo-name> --public --source=. --remote=origin`.)
-
-Because `Experiments/`, `KGs/`, `data/UMLS_*`, and `out/` are gitignored
-(they're large/regenerable), only push `results/comparison.csv` and
-`results/comparison.png` after a run if you want the numeric results
-visible in the repo itself — everything else your professor can regenerate
-by running `bash scripts/run_pipeline.sh`.
+After you finish:
+```bash
+git add -A
+git commit -m "describe what you did"
+git push
+```
+Large/regenerable folders (`Experiments/`, `KGs/`, `data/`, `out/`) are
+gitignored, so only code and `results/` are tracked — your teammate can
+regenerate the rest by running `bash scripts/run_pipeline.sh`.
 
 ## Reference
 
