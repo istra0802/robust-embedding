@@ -1,7 +1,8 @@
 """
 Task 1 - Plausibility scores of triples, before vs after attack.
 
-The plausibility score computed with dicee's own prediction function (model.triple_score / model.predict), for triples from
+The professor asked for the plausibility score computed with dicee's own
+prediction function (model.triple_score / model.predict), for triples from
 BOTH the test set and the training set, and shown as an intermediate result
 for 10 records each.
 
@@ -173,12 +174,13 @@ def main():
     print_change_table("TRAIN set - CHANGE in plausibility for 10 records (after - before)",
                        train_chg, "clean", attacks)
 
-    # save all four tables
+    # save all four tables into results/ (tracked by git, shown on GitHub)
+    # named comparison_score so they sit next to the attack comparison.
     print("\n=== Saving tables ===")
-    save_csv("out/plausibility_test.csv",         test_rows,  fieldnames)
-    save_csv("out/plausibility_train.csv",        train_rows, fieldnames)
-    save_csv("out/plausibility_test_changes.csv",  test_chg,  test_chg_fields)
-    save_csv("out/plausibility_train_changes.csv", train_chg, train_chg_fields)
+    save_csv("results/comparison_score_test.csv",          test_rows,  fieldnames)
+    save_csv("results/comparison_score_train.csv",         train_rows, fieldnames)
+    save_csv("results/comparison_score_test_changes.csv",  test_chg,   test_chg_fields)
+    save_csv("results/comparison_score_train_changes.csv", train_chg,  train_chg_fields)
 
 
 if __name__ == "__main__":
